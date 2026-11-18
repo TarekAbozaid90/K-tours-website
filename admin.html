@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow"><meta name="theme-color" content="#0b100f">
+  <title>K-tours · Admin</title><link rel="icon" href="assets/logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="admin.css">
+  <script src="config.js"></script><script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="admin.js" defer></script>
+</head>
+<body class="admin-body">
+  <header class="admin-top"><a class="brand" href="index.html"><span class="brand-mark"><img src="assets/logo.png" alt="K-tours"></span><span class="brand-copy"><strong>K-TOURS</strong><small>CONTENT DASHBOARD</small></span></a><a class="admin-back" href="index.html">← View website</a></header>
+  <main class="admin-main page-wrap">
+    <section class="admin-login" id="loginPanel">
+      <span class="admin-kicker">PRIVATE AREA</span><h1>Welcome back.</h1><p>Sign in with the website administrator email. We'll send you a secure one-time login link.</p>
+      <form id="loginForm"><label for="adminEmail">Administrator email</label><input id="adminEmail" type="email" required placeholder="you@example.com"><button type="submit" class="button button-gold">Send secure login link <span>↗</span></button></form>
+      <p class="admin-feedback" id="loginFeedback" role="status"></p>
+      <small>To activate this dashboard, first connect the Supabase project and run <code>supabase/schema.sql</code>.</small>
+    </section>
+    <section class="admin-dashboard" id="dashboardPanel" hidden>
+      <div class="admin-heading"><div><span class="admin-kicker">K-TOURS / CONTENT</span><h1>Website dashboard</h1><p>Review guest submissions and manage the public photo gallery.</p></div><button id="signOut" class="admin-quiet">Sign out</button></div>
+      <div class="admin-tabs"><button class="admin-tab active" data-tab="reviews">Guest reviews <span id="pendingCount">0</span></button><button class="admin-tab" data-tab="gallery">Photo gallery</button></div>
+      <section id="reviewsPanel" class="admin-panel"><div class="admin-panel-heading"><h2>Reviews awaiting approval</h2><button class="admin-quiet" id="refreshReviews">Refresh ↻</button></div><div id="pendingReviews" class="admin-cards"><p class="admin-empty">Loading reviews…</p></div></section>
+      <section id="galleryPanel" class="admin-panel" hidden>
+        <div class="admin-panel-heading"><div><h2>Manage gallery</h2><p>Upload your tour photographs. Recommended landscape ratio: 4:3 or 16:9.</p></div></div>
+        <form id="galleryForm" class="gallery-upload"><label>Photo title<input id="galleryTitle" type="text" maxlength="100" required placeholder="e.g. Exploring Karnak Temple"></label><label>Category<select id="galleryCategory"><option>Ancient Egypt</option><option>Islamic Cairo</option><option>Coptic Cairo</option><option>Museums</option><option>Culture & the Nile</option><option>Guest moments</option></select></label><label class="file-drop">Choose photo<input id="galleryFile" type="file" accept="image/jpeg,image/png,image/webp" required></label><button class="button button-gold" type="submit">Upload photograph <span>↗</span></button><p id="galleryFeedback" class="admin-feedback" role="status"></p></form>
+        <div id="galleryItems" class="admin-gallery-items"><p class="admin-empty">Loading gallery…</p></div>
+      </section>
+    </section>
+  </main>
+  <footer class="admin-footer">K-tours · Mohamed Kataif · Private administration</footer>
+</body>
+</html>
