@@ -11,11 +11,33 @@
   <header class="admin-top"><a class="brand" href="index.html"><span class="brand-mark"><img src="assets/logo.png" alt="K-tours"></span><span class="brand-copy"><strong>K-TOURS</strong><small>CONTENT DASHBOARD</small></span></a><a class="admin-back" href="index.html">← View website</a></header>
   <main class="admin-main page-wrap">
     <section class="admin-login" id="loginPanel">
-      <span class="admin-kicker">PRIVATE AREA</span><h1>Welcome back.</h1><p>Sign in with the website administrator email. We'll send you a secure one-time login link.</p>
-      <form id="loginForm"><label for="adminEmail">Administrator email</label><input id="adminEmail" type="email" required placeholder="you@example.com"><button type="submit" class="button button-gold">Send secure login link <span>↗</span></button></form>
-      <p class="admin-feedback" id="loginFeedback" role="status"></p>
-      <small>To activate this dashboard, first connect the Supabase project and run <code>supabase/schema.sql</code>.</small>
+      <span class="admin-kicker">PRIVATE AREA</span><h1>Welcome back.</h1>
+      <p>Sign in with your administrator username and password.</p>
+      <form id="loginForm" novalidate>
+        <label for="adminUsername">Administrator username</label>
+        <input id="adminUsername" name="username" type="text" required maxlength="40" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="admin">
+        <label for="adminPassword">Password</label>
+        <div class="admin-password-wrap"><input id="adminPassword" name="password" type="password" required autocomplete="current-password" placeholder="Enter your password"><button type="button" class="admin-password-toggle" id="togglePassword" aria-label="Show password" aria-pressed="false">Show</button></div>
+        <button type="submit" class="button button-gold" id="loginButton">Sign in <span>↗</span></button>
+      </form>
+      <button type="button" class="admin-text-button" id="forgotPassword">Set password for first use / Forgot password?</button>
+      <p class="admin-feedback" id="loginFeedback" role="status" aria-live="polite"></p>
+      <small>Your password is verified by Supabase Authentication. It is not stored in this website's files.</small>
     </section>
+
+    <section class="admin-login" id="recoveryPanel" hidden>
+      <span class="admin-kicker">ACCOUNT SECURITY</span><h1>Set a new password.</h1>
+      <p>Choose a new password for the K-tours administrator account.</p>
+      <form id="recoveryForm" novalidate>
+        <label for="newAdminPassword">New password</label>
+        <div class="admin-password-wrap"><input id="newAdminPassword" type="password" required minlength="8" autocomplete="new-password" placeholder="At least 8 characters"><button type="button" class="admin-password-toggle" data-toggle="newAdminPassword">Show</button></div>
+        <label for="confirmAdminPassword">Confirm new password</label>
+        <input id="confirmAdminPassword" type="password" required minlength="8" autocomplete="new-password" placeholder="Enter it again">
+        <button type="submit" class="button button-gold" id="savePasswordButton">Save new password <span>↗</span></button>
+      </form>
+      <p class="admin-feedback" id="recoveryFeedback" role="status" aria-live="polite"></p>
+    </section>
+
     <section class="admin-dashboard" id="dashboardPanel" hidden>
       <div class="admin-heading"><div><span class="admin-kicker">K-TOURS / CONTENT</span><h1>Website dashboard</h1><p>Review guest submissions and manage the public photo gallery.</p></div><button id="signOut" class="admin-quiet">Sign out</button></div>
       <div class="admin-tabs"><button class="admin-tab active" data-tab="reviews">Guest reviews <span id="pendingCount">0</span></button><button class="admin-tab" data-tab="gallery">Photo gallery</button></div>

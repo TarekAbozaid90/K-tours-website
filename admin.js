@@ -2,27 +2,63 @@
   const cfg = window.KTOURS_CONFIG || {};
   const ready = Boolean(cfg.SUPABASE_URL && cfg.SUPABASE_ANON_KEY && window.supabase?.createClient);
   const loginPanel = document.getElementById("loginPanel");
+  const recoveryPanel = document.getElementById("recoveryPanel");
   const dashboardPanel = document.getElementById("dashboardPanel");
   const loginFeedback = document.getElementById("loginFeedback");
-  if (!ready) {
-    loginFeedback.textContent = "Supabase is not configured yet. Add the project URL and anon key in config.js, then run supabase/schema.sql.";
-    document.getElementById("loginForm").addEventListener("submit", e => { e.preventDefault(); loginFeedback.textContent = "Connect Supabase first. See README.md for setup steps."; });
-    return;
-  }
-  const db = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
-  const adminEmail = (cfg.ADMIN_EMAIL || "").toLowerCase();
+  const adminEmail = String(cfg.ADMIN_EMAIL || "").trim().toLowerCase();
+  const adminUsername = String(cfg.ADMIN_USERNAME || "admin").trim().toLowerCase();
   const safe = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const feedback = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+  let recoveryMode = false;
+
+  const showLogin = message => {
+    loginPanel.hidden = false;
+    recoveryPanel.hidden = true;
+    dashboardPanel.hidden = true;
+    if (message) feedback("loginFeedback", message);
+  };
+  const showRecovery = () => {
+    recoveryMode = true;
+    loginPanel.hidden = true;
+    dashboardPanel.hidden = true;
+    recoveryPanel.hidden = false;
+    document.getElementById("newAdminPassword")?.focus();
+  };
+
+  const usernameInput = document.getElementById("adminUsername");
+  if (usernameInput) usernameInput.value = adminUsername;
+
+  if (!ready) {
+    showLogin("Supabase is not configured yet. Add the project URL and anon key in config.js, then run supabase/schema.sql.");
+    document.getElementById("loginForm").addEventListener("submit", e => {
+      e.preventDefault();
+      feedback("loginFeedback", "Connect Supabase first. See README.md for setup steps.");
+    });
+    document.getElementById("forgotPassword").addEventListener("click", () => {
+      feedback("loginFeedback", "Connect Supabase first. See README.md for setup steps.");
+    });
+    return;
+  }
+
+  if (!adminEmail || !adminUsername) {
+    showLogin("Set ADMIN_USERNAME and ADMIN_EMAIL in config.js before using the dashboard.");
+    return;
+  }
+
+  const db = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
   const showDashboard = async session => {
     const email = session?.user?.email?.toLowerCase();
     if (!email || email !== adminEmail) {
-      loginPanel.hidden = false; dashboardPanel.hidden = true;
-      loginFeedback.textContent = `This account (${email || "unknown"}) is not the configured administrator.`;
+      await db.auth.signOut();
+      showLogin("This account is not the configured K-tours administrator.");
       return;
     }
-    loginPanel.hidden = true; dashboardPanel.hidden = false;
+    loginPanel.hidden = true;
+    recoveryPanel.hidden = true;
+    dashboardPanel.hidden = false;
     await Promise.all([loadReviews(), loadGallery()]);
   };
+
   const loadReviews = async () => {
     const wrap = document.getElementById("pendingReviews"); wrap.innerHTML = '<p class="admin-empty">Loading…</p>';
     const { data, error } = await db.from("reviews").select("id,name,country,rating,message,photo_urls,created_at,approved").eq("approved", false).order("created_at", { ascending:false });
@@ -38,6 +74,7 @@
         <div class="admin-review-actions"><button class="approve" data-action="approve" data-id="${safe(row.id)}">Approve</button><button class="delete" data-action="delete-review" data-id="${safe(row.id)}">Delete</button></div>
       </article>`).join("");
   };
+
   const loadGallery = async () => {
     const wrap = document.getElementById("galleryItems"); wrap.innerHTML = '<p class="admin-empty">Loading…</p>';
     const { data, error } = await db.from("gallery").select("id,title,category,image_url,storage_path,sort_order").order("sort_order", { ascending:true });
@@ -45,14 +82,70 @@
     if (!data.length) { wrap.innerHTML = '<p class="admin-empty">Your gallery is empty. Upload your first tour photograph above.</p>'; return; }
     wrap.innerHTML = data.map(row => `<article class="admin-gallery-card"><img src="${safe(row.image_url)}" alt="${safe(row.title)}"><strong>${safe(row.title)}</strong><small>${safe(row.category || "")}</small><button data-action="delete-gallery" data-id="${safe(row.id)}" data-path="${safe(row.storage_path || "")}">Remove photo</button></article>`).join("");
   };
+
   document.getElementById("loginForm").addEventListener("submit", async e => {
     e.preventDefault();
-    const email = document.getElementById("adminEmail").value.trim().toLowerCase();
-    if (email !== adminEmail) { loginFeedback.textContent = "Use the administrator email configured in config.js."; return; }
-    loginFeedback.textContent = "Sending secure sign-in link…";
-    const { error } = await db.auth.signInWithOtp({ email, options:{ emailRedirectTo:window.location.href.split("?")[0] } });
-    loginFeedback.textContent = error ? error.message : "Check your email for the secure sign-in link.";
+    const username = document.getElementById("adminUsername").value.trim().toLowerCase();
+    const password = document.getElementById("adminPassword").value;
+    if (!username || !password) { feedback("loginFeedback", "Enter both username and password."); return; }
+    if (username !== adminUsername) { feedback("loginFeedback", "Invalid username or password."); return; }
+    const button = document.getElementById("loginButton"); button.disabled = true;
+    feedback("loginFeedback", "Checking your credentials…");
+    try {
+      const { error } = await db.auth.signInWithPassword({ email: adminEmail, password });
+      if (error) throw error;
+    } catch (err) {
+      feedback("loginFeedback", "Login failed. Check your username and password, then try again.");
+    } finally { button.disabled = false; }
   });
+
+  document.getElementById("forgotPassword").addEventListener("click", async () => {
+    const button = document.getElementById("forgotPassword"); button.disabled = true;
+    feedback("loginFeedback", "Requesting a password reset email…");
+    try {
+      const redirectTo = `${window.location.origin}${window.location.pathname}`;
+      const { error } = await db.auth.resetPasswordForEmail(adminEmail, { redirectTo });
+      if (error) throw error;
+      feedback("loginFeedback", "If this administrator account exists, a password-reset email has been sent. Open it on this device to set a new password.");
+    } catch (err) {
+      feedback("loginFeedback", err.message || "Could not request a password reset. Check Supabase settings.");
+    } finally { button.disabled = false; }
+  });
+
+  document.getElementById("recoveryForm").addEventListener("submit", async e => {
+    e.preventDefault();
+    const password = document.getElementById("newAdminPassword").value;
+    const confirmation = document.getElementById("confirmAdminPassword").value;
+    if (password.length < 8) { feedback("recoveryFeedback", "Use at least 8 characters."); return; }
+    if (password !== confirmation) { feedback("recoveryFeedback", "The passwords do not match."); return; }
+    const button = document.getElementById("savePasswordButton"); button.disabled = true;
+    feedback("recoveryFeedback", "Saving your new password…");
+    try {
+      const { error } = await db.auth.updateUser({ password });
+      if (error) throw error;
+      recoveryMode = false;
+      await db.auth.signOut();
+      history.replaceState({}, document.title, window.location.pathname);
+      document.getElementById("recoveryForm").reset();
+      showLogin("Password updated successfully. Sign in with your username and new password.");
+    } catch (err) {
+      feedback("recoveryFeedback", err.message || "Could not update the password. Request a new reset email and try again.");
+    } finally { button.disabled = false; }
+  });
+
+  document.getElementById("togglePassword").addEventListener("click", e => {
+    const input = document.getElementById("adminPassword");
+    const visible = input.type === "password";
+    input.type = visible ? "text" : "password";
+    e.currentTarget.textContent = visible ? "Hide" : "Show";
+    e.currentTarget.setAttribute("aria-pressed", String(visible));
+  });
+  document.querySelectorAll("[data-toggle]").forEach(button => button.addEventListener("click", e => {
+    const input = document.getElementById(e.currentTarget.dataset.toggle);
+    const visible = input.type === "password"; input.type = visible ? "text" : "password";
+    e.currentTarget.textContent = visible ? "Hide" : "Show";
+  }));
+
   document.getElementById("signOut").addEventListener("click", async () => { await db.auth.signOut(); location.reload(); });
   document.getElementById("refreshReviews").addEventListener("click", loadReviews);
   document.querySelectorAll(".admin-tab").forEach(tab => tab.addEventListener("click", () => {
@@ -60,6 +153,7 @@
     document.getElementById("reviewsPanel").hidden = tab.dataset.tab !== "reviews";
     document.getElementById("galleryPanel").hidden = tab.dataset.tab !== "gallery";
   }));
+
   document.addEventListener("click", async e => {
     const btn = e.target.closest("button[data-action]"); if (!btn) return;
     const id = btn.dataset.id; btn.disabled = true;
@@ -67,10 +161,10 @@
       if (btn.dataset.action === "approve") {
         const { error } = await db.from("reviews").update({ approved:true }).eq("id", id); if (error) throw error; await loadReviews();
       } else if (btn.dataset.action === "delete-review") {
-        if (!confirm("Delete this guest review permanently?")) return;
+        if (!confirm("Delete this guest review permanently?")) { btn.disabled = false; return; }
         const { error } = await db.from("reviews").delete().eq("id", id); if (error) throw error; await loadReviews();
       } else if (btn.dataset.action === "delete-gallery") {
-        if (!confirm("Remove this photo from the website gallery?")) return;
+        if (!confirm("Remove this photo from the website gallery?")) { btn.disabled = false; return; }
         const path = btn.dataset.path;
         const { error } = await db.from("gallery").delete().eq("id", id); if (error) throw error;
         if (path) await db.storage.from("gallery").remove([path]);
@@ -78,6 +172,7 @@
       }
     } catch (err) { alert(err.message || "Could not complete that action."); btn.disabled = false; }
   });
+
   document.getElementById("galleryForm").addEventListener("submit", async e => {
     e.preventDefault();
     const title = document.getElementById("galleryTitle").value.trim();
@@ -99,6 +194,20 @@
     } catch (err) { console.error(err); feedback("galleryFeedback", err.message || "Upload failed. Check storage policies."); }
     finally { submit.disabled = false; }
   });
-  db.auth.getSession().then(({ data }) => data.session ? showDashboard(data.session) : null);
-  db.auth.onAuthStateChange((_event, session) => { if (session) showDashboard(session); else { dashboardPanel.hidden = true; loginPanel.hidden = false; } });
+
+  db.auth.onAuthStateChange((event, session) => {
+    if (event === "PASSWORD_RECOVERY") {
+      showRecovery();
+      return;
+    }
+    if (event === "SIGNED_OUT") {
+      recoveryMode = false;
+      showLogin();
+      return;
+    }
+    if (session && !recoveryMode) {
+      // Defer Supabase reads until after the auth event callback completes.
+      Promise.resolve().then(() => showDashboard(session));
+    }
+  });
 })();

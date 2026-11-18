@@ -8,11 +8,12 @@ A responsive, bilingual (English / Egyptian Arabic) tourism portfolio for Mohame
 - `styles.css` - responsive design and RTL support.
 - `app.js` - language switch, WhatsApp enquiry, public reviews and gallery loading.
 - `admin.html`, `admin.css`, `admin.js` - private dashboard for review moderation and gallery uploads.
-- `config.js` - public Supabase project URL + public anon/publishable key, WhatsApp number and admin email.
+- `config.js` - public Supabase project URL + public anon/publishable key, WhatsApp number, admin username and admin email. No password is stored in this file.
 - `supabase/schema.sql` - tables, row-level security policies and Storage bucket setup.
 - `assets/logo.png` - supplied K-tours logo.
 - `assets/gallery/group-tour-giza.jpg` - group photograph supplied by Mohamed Kataif.
 - `photo-credits.html` - attribution and licence details for third-party destination photographs.
+- `ADMIN-LOGIN-SETUP.md` - first-time admin password setup and instructions for changing the username/password.
 - `docs/K-tours-Guide-GitHub-Render-Supabase.pdf` - illustrated Arabic setup guide.
 - `docs/K-tours-Guide-GitHub-Render-Supabase.docx` - editable source of the guide.
 
@@ -24,7 +25,7 @@ The Giza group photo is local to the project. Before publishing it publicly, con
 
 ## Illustrated deployment guide
 
-Open the Arabic eight-page guide in `docs/` for the step-by-step GitHub, Render and Supabase workflow, including the RLS/security reminders, admin login, test checklist and suggested improvements. The interface panels in the guide are explanatory illustrations; live dashboard labels and layouts can change.
+Open the Arabic eight-page guide in `docs/` for the step-by-step GitHub, Render and Supabase workflow, including RLS/security reminders, test checklist and suggested improvements. For the current username/password admin login and first-time password setup, follow `ADMIN-LOGIN-SETUP.md` (it supersedes the older admin sign-in note in the PDF). The interface panels in the guide are explanatory illustrations; live dashboard labels and layouts can change.
 
 ## Run a local preview
 
@@ -49,13 +50,23 @@ window.KTOURS_CONFIG = {
   SUPABASE_URL: "https://YOUR-PROJECT.supabase.co",
   SUPABASE_ANON_KEY: "YOUR-PUBLIC-ANON-OR-PUBLISHABLE-KEY",
   WHATSAPP_NUMBER: "201009494068",
+  ADMIN_USERNAME: "admin",
   ADMIN_EMAIL: "mkataif@gmail.com"
 };
 ```
 
 6. The administrator email must match the email in both `config.js` and the SQL policies in `supabase/schema.sql`. The current default is taken from the supplied CV. If changing it, replace it in both files before running the SQL (or update the policies afterwards).
-7. Create/confirm the administrator account for that email in Supabase Authentication. The dashboard uses a one-time email login link.
-8. Visit `/admin.html`, request the login link, and check the admin inbox. Use the Reviews tab to approve or delete submissions. Use the Photo gallery tab to add or remove photographs.
+7. In **Authentication → Users**, make sure the administrator account `mkataif@gmail.com` exists. The existing account created by the previous magic-link setup can be reused. If it does not exist, create/invite this user from the Supabase Dashboard first.
+8. Open `/admin.html` and use **Set password for first use / Forgot password?**. Supabase sends a recovery email to the configured administrator email. Open it on the same browser/device, choose the initial password, then sign in using username `admin` and that password. This email step is only for initial setup or password recovery; normal sign-ins use username + password.
+9. Use the Reviews tab to approve or delete submissions. Use the Photo gallery tab to add or remove photographs.
+
+### Change the admin username or password
+
+- **Username:** edit only `ADMIN_USERNAME` in `config.js`, save, then commit/push the file to GitHub so Render redeploys. The login form reads the configured username automatically.
+- **Password:** do not edit HTML/JavaScript to change it. On `/admin.html`, click **Set password for first use / Forgot password?**, open the reset email, and enter the new password twice. Supabase stores/verifies the password; it is never written into this repository.
+- **Administrator email:** this is also used in the SQL Row Level Security policies. If you change `ADMIN_EMAIL`, update every matching email condition in `supabase/schema.sql` and re-run the relevant policy SQL. Keep the email consistent.
+
+The reset redirect URL must be allowed under **Authentication → URL Configuration → Redirect URLs**. Add the full admin URL for the live Render domain, for example `https://YOUR-SITE.onrender.com/admin.html`, and the local admin URL if testing locally.
 
 **Security:** only the public `anon` / publishable key belongs in `config.js`. Never put a `service_role` / secret key in a browser file or GitHub repository. Keep row-level security (RLS) enabled. The SQL allows public visitors to submit unapproved reviews; only the configured admin can read pending items, approve them or manage the public gallery.
 
