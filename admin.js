@@ -95,7 +95,28 @@
       const { error } = await db.auth.signInWithPassword({ email: adminEmail, password });
       if (error) throw error;
     } catch (err) {
-      feedback("loginFeedback", "Login failed. Check your username and password, then try again.");
+      // Keep the detailed Supabase response in the browser console and show a
+      // useful, non-secret diagnostic in the page. Never log the password.
+      const message = String(err?.message || "");
+      const code = String(err?.code || "");
+      console.error("K-tours admin sign-in failed", {
+        code,
+        message,
+        status: err?.status
+      });
+
+      const lower = message.toLowerCase();
+      if (code === "email_not_confirmed" || lower.includes("email not confirmed")) {
+        feedback("loginFeedback", "This Supabase user exists but its email is not confirmed. Confirm the email in Supabase Authentication → Users, then try again.");
+      } else if (code === "invalid_credentials" || lower.includes("invalid login credentials")) {
+        feedback("loginFeedback", `Supabase rejected the email/password for ${adminEmail}. Check Authentication → Users: the exact email must exist and have this password set. The username is only mapped to this email.`);
+      } else if (lower.includes("invalid api key") || lower.includes("apikey")) {
+        feedback("loginFeedback", "Supabase rejected the public API key. Check SUPABASE_URL and SUPABASE_ANON_KEY in config.js against the same Supabase project.");
+      } else if (lower.includes("failed to fetch") || lower.includes("network")) {
+        feedback("loginFeedback", "Could not reach Supabase. Check the Project URL, network connection, and browser console.");
+      } else {
+        feedback("loginFeedback", `Supabase sign-in error: ${message || "Unknown error. Open the browser console for details."}`);
+      }
     } finally { button.disabled = false; }
   });
 
