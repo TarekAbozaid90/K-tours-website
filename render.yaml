@@ -1,6 +1,0 @@
-services:
-  - type: web
-    name: k-tours
-    runtime: static
-    buildCommand: ""
-    staticPublishPath: .
