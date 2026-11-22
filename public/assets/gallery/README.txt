@@ -1,0 +1,1 @@
+K-tours uploaded gallery and guest-review photographs are stored as PostgreSQL BYTEA records in the Neon database. They are not stored on Render's ephemeral filesystem. Public review photographs remain private until the review is approved.

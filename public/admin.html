@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow"><meta name="theme-color" content="#17231e">
+  <title>K-tours · Admin</title><link rel="icon" href="assets/logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="admin.css">
+  <script src="admin.js" defer></script>
+</head>
+<body class="admin-body">
+  <header class="admin-top"><a class="brand" href="index.html"><span class="brand-mark"><img src="assets/logo.png" alt="K-tours"></span><span class="brand-copy"><strong>K-TOURS</strong><small>CONTENT DASHBOARD</small></span></a><a class="admin-back" href="index.html">← View website</a></header>
+  <main class="admin-main page-wrap">
+    <section class="admin-login" id="loginPanel">
+      <span class="admin-kicker">PRIVATE AREA</span><h1>Welcome back.</h1>
+      <p>Sign in with your administrator username and password.</p>
+      <form id="loginForm" novalidate>
+        <label for="adminUsername">Administrator username</label>
+        <input id="adminUsername" name="username" type="text" required maxlength="40" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="admin">
+        <label for="adminPassword">Password</label>
+        <div class="admin-password-wrap"><input id="adminPassword" name="password" type="password" required autocomplete="current-password" placeholder="Enter your password"><button type="button" class="admin-password-toggle" id="togglePassword" aria-label="Show password" aria-pressed="false">Show</button></div>
+        <button type="submit" class="button button-gold" id="loginButton">Sign in <span>↗</span></button>
+      </form>
+      <p class="admin-feedback" id="loginFeedback" role="status" aria-live="polite"></p>
+      <small>Your login is verified by the K-tours server. To change the username or password, use Render → k-tours-fullstack → Environment. Credentials are never stored in the public website files.</small>
+    </section>
+
+    <section class="admin-dashboard" id="dashboardPanel" hidden>
+      <div class="admin-heading"><div><span class="admin-kicker">K-TOURS / CONTENT</span><h1>Website dashboard</h1><p>Review guest submissions and manage the public photo gallery.</p></div><button id="signOut" class="admin-quiet">Sign out</button></div>
+      <div class="admin-tabs"><button class="admin-tab active" data-tab="reviews">Guest reviews <span id="pendingCount">0</span></button><button class="admin-tab" data-tab="gallery">Photo gallery</button><button class="admin-tab" data-tab="visitors">Visitor book</button></div>
+      <section id="reviewsPanel" class="admin-panel"><div class="admin-panel-heading"><h2>Reviews awaiting approval</h2><button class="admin-quiet" id="refreshReviews">Refresh ↻</button></div><div id="pendingReviews" class="admin-cards"><p class="admin-empty">Loading reviews…</p></div></section>
+      <section id="visitorsPanel" class="admin-panel" hidden>
+        <div class="admin-panel-heading"><div><h2>Visitor book</h2><p>Only visits from people who accepted the visitor-data notice appear here. IP-derived location is approximate.</p></div><div class="visitor-admin-actions"><button class="admin-quiet" id="refreshVisitors">Refresh ↻</button><button class="admin-quiet admin-danger" id="clearVisitors">Clear visitor log</button></div></div>
+        <div class="visitor-stats"><article><strong id="visitorTotal">0</strong><span>Recorded visits · last 30 days</span></article><article><strong id="visitorToday">0</strong><span>Recorded today</span></article><article><strong>30 days</strong><span>Automatic retention period</span></article></div>
+        <p class="visitor-disclaimer">IP address is encrypted in the database and decrypted only for this protected admin view. City and country are estimates from IP data, not an exact physical location. Location lookup uses <a href="https://ipdata.co" target="_blank" rel="noopener">ipdata.co</a>.</p>
+        <div id="visitorTableWrap" class="visitor-table-wrap"><p class="admin-empty">Loading visitor book…</p></div>
+      </section>
+      <section id="galleryPanel" class="admin-panel" hidden>
+        <div class="admin-panel-heading"><div><h2>Manage gallery</h2><p>Upload your tour photographs. Recommended landscape ratio: 4:3 or 16:9.</p></div></div>
+        <form id="galleryForm" class="gallery-upload"><label>Photo title<input id="galleryTitle" type="text" maxlength="100" required placeholder="e.g. Exploring Karnak Temple"></label><label>Category<select id="galleryCategory"><option>Ancient Egypt</option><option>Islamic Cairo</option><option>Coptic Cairo</option><option>Museums</option><option>Culture & the Nile</option><option>Guest moments</option></select></label><label class="file-drop">Choose photo<input id="galleryFile" type="file" accept="image/jpeg,image/png,image/webp" required></label><button class="button button-gold" type="submit">Upload photograph <span>↗</span></button><p id="galleryFeedback" class="admin-feedback" role="status"></p></form>
+        <div id="galleryItems" class="admin-gallery-items"><p class="admin-empty">Loading gallery…</p></div>
+      </section>
+    </section>
+  </main>
+  <footer class="admin-footer">K-tours · Mohamed Kataif · Private administration</footer>
+</body>
+</html>

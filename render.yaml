@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: k-tours-fullstack
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm install --omit=dev
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: VISITOR_BOOK_ENABLED
+        value: "true"
+      - key: VISITOR_IP_ENCRYPTION_KEY
+        generateValue: true
+      - key: WHATSAPP_NUMBER
+        value: "201009494068"
