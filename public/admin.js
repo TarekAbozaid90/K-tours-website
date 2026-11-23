@@ -6,6 +6,13 @@
     const element = document.getElementById(id);
     if (element) element.textContent = message;
   };
+  function countryLabel(row) {
+    if (row.country) return row.country;
+    const code = String(row.country_code || '').trim().toUpperCase();
+    if (!code) return 'Unavailable';
+    try { return new Intl.DisplayNames(['en'], { type: 'region' }).of(code) || code; }
+    catch { return code; }
+  }
 
   async function api(url, options = {}) {
     const response = await fetch(url, {
@@ -30,7 +37,7 @@
   async function showDashboard() {
     loginPanel.hidden = true;
     dashboardPanel.hidden = false;
-    await Promise.all([loadReviews(), loadGallery(), loadVisitors()]);
+    await Promise.all([loadStats(), loadReviews(), loadGallery(), loadVisitors()]);
   }
 
   async function loadReviews() {
@@ -69,15 +76,75 @@
         wrap.innerHTML = '<p class="admin-empty">Your gallery is empty. Upload your first tour photograph above.</p>';
         return;
       }
-      wrap.innerHTML = rows.map(row => `
-        <article class="admin-gallery-card">
+      const categories = ['Ancient Egypt','Islamic Cairo','Coptic Cairo','Museums','Culture & the Nile','Guest moments','Red Sea & Sinai','Oases & Desert','Other'];
+      wrap.innerHTML = rows.map((row, index) => `
+        <article class="admin-gallery-card" data-id="${safe(row.id)}" data-order="${Number(row.sort_order)||0}">
           <img src="${safe(row.image_url)}" alt="${safe(row.title)}">
-          <strong>${safe(row.title)}</strong><small>${safe(row.category || '')}</small>
-          <button data-action="delete-gallery" data-id="${safe(row.id)}">Remove photo</button>
+          <form class="gallery-edit-form" data-id="${safe(row.id)}">
+            <label>Photo title · English<input name="title" maxlength="100" required value="${safe(row.title)}"></label>
+            <label>Photo title · Arabic<input name="title_ar" maxlength="100" value="${safe(row.title_ar || row.title)}"></label>
+            <label>Category<select name="category">${categories.map(category => `<option value="${safe(category)}" ${category === row.category ? 'selected' : ''}>${safe(category)}</option>`).join('')}</select></label>
+            <label class="gallery-visible"><input name="visible" type="checkbox" ${row.visible ? 'checked' : ''}> Show on website</label>
+            <label class="gallery-replace">Replace image (optional)<input name="photo" type="file" accept="image/jpeg,image/png,image/webp"></label>
+            <div class="gallery-card-actions">
+              <button type="submit" class="gallery-save">Save changes</button>
+              <button type="button" data-action="move-gallery-up" data-id="${safe(row.id)}" ${index === 0 ? 'disabled' : ''} aria-label="Move photo up">↑</button>
+              <button type="button" data-action="move-gallery-down" data-id="${safe(row.id)}" ${index === rows.length - 1 ? 'disabled' : ''} aria-label="Move photo down">↓</button>
+              <button type="button" class="gallery-remove" data-action="delete-gallery" data-id="${safe(row.id)}">Delete</button>
+            </div>
+          </form>
         </article>`).join('');
     } catch (error) {
       wrap.innerHTML = `<p class="admin-empty">${safe(error.message)}</p>`;
     }
+  }
+
+  async function loadStats() {
+    const cards = document.getElementById('statsCards');
+    if (!cards) return;
+    cards.innerHTML = '<p class="admin-empty">Loading statistics…</p>';
+    try {
+      const result = await api('/api/admin/stats');
+      const r = result.reviews || {}, g = result.gallery || {}, v = result.visitors || {};
+      cards.innerHTML = [
+        ['Visits · 30 days', v.total ?? 0, `${v.today ?? 0} today · ${v.last7 ?? 0} in 7 days`],
+        ['Unique browsers', v.unique_browsers ?? 0, 'Based on consented browser IDs'],
+        ['Guest reviews', r.total ?? 0, `${r.pending ?? 0} awaiting approval`],
+        ['Approved reviews', r.approved ?? 0, `Average ${Number(r.average_rating || 0).toFixed(1)} / 5`],
+        ['Gallery photographs', g.total ?? 0, `${g.visible ?? 0} visible on website`],
+        ['Visits with country', v.located ?? 0, `${Math.max(0, Number(v.total || 0) - Number(v.located || 0))} country unavailable`]
+      ].map(([label,value,note]) => `<article class="stat-card"><span>${safe(label)}</span><strong>${safe(value)}</strong><small>${safe(note)}</small></article>`).join('');
+      renderStatBars('statsCountries', result.topCountries || []);
+      renderStatBars('statsDevices', result.devices || []);
+      renderStatBars('statsPages', result.popularPages || []);
+      renderStatBars('statsReferrers', result.referrers || []);
+      renderStatBars('statsBrowsers', result.browsers || []);
+      renderDailyVisits('statsDaily', result.dailyVisits || []);
+    } catch (error) {
+      cards.innerHTML = `<p class="admin-empty">${safe(error.message)}</p>`;
+    }
+  }
+
+  function renderStatBars(id, items) {
+    const element = document.getElementById(id);
+    if (!element) return;
+    if (!items.length) { element.innerHTML = '<p class="admin-empty">No data recorded yet.</p>'; return; }
+    const max = Math.max(1, ...items.map(item => Number(item.total) || 0));
+    element.innerHTML = items.map(item => {
+      let label = item.label;
+      if (id === 'statsCountries' && /^[A-Z]{2}$/.test(String(label || ''))) {
+        try { label = new Intl.DisplayNames(['en'], { type: 'region' }).of(label) || label; } catch { /* keep ISO country code */ }
+      }
+      return `<div class="stat-bar-row"><div><span>${safe(label)}</span><strong>${Number(item.total)||0}</strong></div><div class="stat-bar"><i style="width:${Math.max(3,((Number(item.total)||0)/max)*100)}%"></i></div></div>`;
+    }).join('');
+  }
+
+  function renderDailyVisits(id, items) {
+    const element = document.getElementById(id);
+    if (!element) return;
+    if (!items.length) { element.innerHTML = '<p class="admin-empty">No daily traffic data yet.</p>'; return; }
+    const max = Math.max(1, ...items.map(item => Number(item.total) || 0));
+    element.innerHTML = items.map(item => `<div class="daily-visit"><div class="daily-visit-bar" title="${safe(item.label)}: ${Number(item.total)||0} visits"><i style="height:${Math.max(3,((Number(item.total)||0)/max)*100)}%"></i></div><strong>${Number(item.total)||0}</strong><span>${safe(item.label)}</span></div>`).join('');
   }
 
   async function loadVisitors() {
@@ -98,7 +165,7 @@
         return;
       }
       wrap.innerHTML = `<table class="visitor-table"><thead><tr><th>Date & time</th><th>IP address</th><th>City / region</th><th>Country</th><th>Device</th><th>Browser / OS</th><th>Page</th></tr></thead><tbody>${rows.map(row => `
-        <tr><td>${safe(new Date(row.created_at).toLocaleString())}</td><td><code>${safe(row.ip)}</code></td><td>${safe([row.city, row.region].filter(Boolean).join(', ') || 'Unavailable')}</td><td>${safe(row.country || 'Unavailable')} ${safe(row.country_code || '')}</td><td>${safe(row.device_type || 'Unknown')}</td><td>${safe([row.browser, row.device_os].filter(Boolean).join(' · '))}</td><td><span title="Referrer: ${safe(row.referrer_host || 'Direct')}">${safe(row.page_path || '/')}</span></td></tr>`).join('')}</tbody></table>`;
+        <tr><td>${safe(new Date(row.created_at).toLocaleString())}</td><td><code>${safe(row.ip)}</code></td><td>${safe([row.city, row.region].filter(Boolean).join(', ') || 'Unavailable')}</td><td>${safe(countryLabel(row))} ${safe(row.country && row.country_code ? row.country_code : '')}</td><td>${safe(row.device_type || 'Unknown')}</td><td>${safe([row.browser, row.device_os].filter(Boolean).join(' · '))}</td><td><span title="Referrer: ${safe(row.referrer_host || 'Direct')}">${safe(row.page_path || '/')}</span></td></tr>`).join('')}</tbody></table>`;
     } catch (error) {
       wrap.innerHTML = `<p class="admin-empty">${safe(error.message)}</p>`;
     }
@@ -139,7 +206,18 @@
     finally { location.reload(); }
   });
   document.getElementById('refreshReviews').addEventListener('click', loadReviews);
+  document.getElementById('refreshStats')?.addEventListener('click', loadStats);
   document.getElementById('refreshVisitors')?.addEventListener('click', loadVisitors);
+  document.getElementById('retryVisitorLocations')?.addEventListener('click', async event => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      const result = await api('/api/admin/visitors/retry-location', { method: 'POST', body: '{}' });
+      feedback('visitorRetryFeedback', `${result.queued || 0} missing country records queued. Refreshing the latest six…`);
+      await loadVisitors();
+    } catch (error) { alert(error.message || 'Could not queue location retries.'); }
+    finally { button.disabled = false; }
+  });
   document.getElementById('clearVisitors')?.addEventListener('click', async () => {
     if (!confirm('Permanently delete all visitor log entries?')) return;
     try { await api('/api/admin/visitors', { method: 'DELETE', body: '{}' }); await loadVisitors(); }
@@ -148,10 +226,13 @@
 
   document.querySelectorAll('.admin-tab').forEach(tab => tab.addEventListener('click', () => {
     document.querySelectorAll('.admin-tab').forEach(item => item.classList.toggle('active', item === tab));
+    document.getElementById('statsPanel').hidden = tab.dataset.tab !== 'stats';
     document.getElementById('reviewsPanel').hidden = tab.dataset.tab !== 'reviews';
     document.getElementById('galleryPanel').hidden = tab.dataset.tab !== 'gallery';
     document.getElementById('visitorsPanel').hidden = tab.dataset.tab !== 'visitors';
+    if (tab.dataset.tab === 'stats') loadStats();
     if (tab.dataset.tab === 'visitors') loadVisitors();
+    if (tab.dataset.tab === 'gallery') loadGallery();
   }));
 
   document.addEventListener('click', async event => {
@@ -164,11 +245,15 @@
         await api(`/api/admin/reviews/${encodeURIComponent(id)}/approve`, { method: 'POST', body: '{}' });
         await loadReviews();
       } else if (button.dataset.action === 'delete-review') {
-        if (!confirm('Delete this guest review permanently?')) return;
+        if (!confirm('Delete this guest review permanently?')) { button.disabled = false; return; }
         await api(`/api/admin/reviews/${encodeURIComponent(id)}`, { method: 'DELETE' });
         await loadReviews();
+      } else if (button.dataset.action === 'move-gallery-up' || button.dataset.action === 'move-gallery-down') {
+        const direction = button.dataset.action.endsWith('up') ? 'up' : 'down';
+        await api(`/api/admin/gallery/${encodeURIComponent(id)}/move`, { method: 'POST', body: JSON.stringify({ direction }) });
+        await loadGallery();
       } else if (button.dataset.action === 'delete-gallery') {
-        if (!confirm('Remove this photo from the website gallery?')) return;
+        if (!confirm('Remove this photo from the website gallery?')) { button.disabled = false; return; }
         await api(`/api/admin/gallery/${encodeURIComponent(id)}`, { method: 'DELETE' });
         await loadGallery();
       }
@@ -201,6 +286,28 @@
     if (!dialog.open) dialog.showModal();
   });
 
+  document.getElementById('galleryItems').addEventListener('submit', async event => {
+    const form = event.target.closest('.gallery-edit-form');
+    if (!form) return;
+    event.preventDefault();
+    const id = form.dataset.id;
+    const submit = form.querySelector('button[type=submit]');
+    const data = new FormData(form);
+    const photo = form.querySelector('input[name=photo]').files[0];
+    if (photo && (!/^image\/(jpeg|png|webp)$/.test(photo.type) || photo.size > 3 * 1024 * 1024)) {
+      alert('Choose JPG, PNG or WebP up to 3 MB.'); return;
+    }
+    data.set('visible', form.querySelector('input[name=visible]').checked ? 'true' : 'false');
+    data.set('sort_order', form.closest('.admin-gallery-card').dataset.order || '0');
+    submit.disabled = true;
+    try {
+      await api(`/api/admin/gallery/${encodeURIComponent(id)}`, { method: 'PATCH', body: data });
+      await loadGallery();
+      feedback('galleryFeedback', 'Gallery item updated.');
+    } catch (error) { alert(error.message || 'Could not update gallery item.'); }
+    finally { submit.disabled = false; }
+  });
+
   document.getElementById('galleryForm').addEventListener('submit', async event => {
     event.preventDefault();
     const title = document.getElementById('galleryTitle').value.trim();
@@ -217,6 +324,7 @@
     try {
       const formData = new FormData();
       formData.set('title', title);
+      formData.set('title_ar', document.getElementById('galleryTitleAr').value.trim() || title);
       formData.set('category', category);
       formData.set('photo', file, file.name);
       await api('/api/admin/gallery', { method: 'POST', body: formData });

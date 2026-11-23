@@ -1,0 +1,23 @@
+K-TOURS ADMIN / VISITOR COUNTRY / STATISTICS / GALLERY PATCH
+
+This patch is for the existing K-tours-website repository on GitHub (main).
+
+1) Extract this ZIP.
+2) Copy the included files and folders into the ROOT of your existing repository, keeping their paths exactly as shown.
+3) Replace existing files when GitHub asks. Do not delete other files.
+4) Commit the changes to branch main.
+5) Wait for Render to deploy the latest commit. If auto-deploy is disabled, open Render > k-tours-fullstack > Manual Deploy > Deploy latest commit.
+6) No Render Environment variables, Neon credentials, or manual SQL changes are required.
+
+What this patch changes:
+- Country lookup now checks api.country.is, then enriches with ipwho.is and ipapi.co when needed.
+- Existing Visitor Book rows with missing country names can be retried in small batches. Use Visitor Book > Retry missing countries.
+- Statistics now include the last 7 days, distinct consented browsers, country coverage, top pages, referrers, devices, browsers, reviews and gallery counts.
+- The existing homepage gallery starter items are database-managed and editable: title (English/Arabic), category, visibility, image replacement, ordering and delete.
+- The 3 MB per-image upload limit is retained in browser and server validation.
+
+Important:
+- The visitor notice version changes to 2026-11-23-v5 so visitors will be asked to review the updated provider disclosure again.
+- Country/city detection is approximate and may fail for VPNs, private/reserved addresses, mobile gateways or provider rate limits.
+- Do not upload DATABASE_URL, ADMIN_PASSWORD, SESSION_SECRET or VISITOR_IP_ENCRYPTION_KEY to GitHub.
+- The patch does not reset, clear or recreate your Neon database. Existing reviews, visitor rows and uploaded images are retained.

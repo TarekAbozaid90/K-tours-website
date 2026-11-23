@@ -27,6 +27,7 @@
   };
 
   let lang = localStorage.getItem("ktours-lang") || "en";
+  let currentGalleryItems = null;
   const applyLanguage = (next) => {
     lang = next;
     localStorage.setItem("ktours-lang", lang);
@@ -39,7 +40,7 @@
     });
     document.querySelectorAll(".lang-btn").forEach(btn => btn.classList.toggle("active", btn.dataset.lang === lang));
   };
-  document.querySelectorAll(".lang-btn").forEach(btn => btn.addEventListener("click", () => { applyLanguage(btn.dataset.lang); renderVisitorConsent(); }));
+  document.querySelectorAll(".lang-btn").forEach(btn => btn.addEventListener("click", () => { applyLanguage(btn.dataset.lang); renderVisitorConsent(); if (Array.isArray(currentGalleryItems)) renderGallery(currentGalleryItems); }));
   applyLanguage(lang);
   document.getElementById("year").textContent = new Date().getFullYear();
 
@@ -80,13 +81,22 @@
       </article>`).join("");
   };
   const renderGallery = (items) => {
-    galleryGrid.querySelectorAll("[data-uploaded-gallery]").forEach(el => el.remove());
-    const uploaded = (items || []).map((item, i) => `
-      <figure class="gallery-tile" data-uploaded-gallery>
-        <img src="${safeText(item.image_url)}" alt="${safeText(item.title || "K-tours gallery photograph")}" data-photo-description="${safeText(item.category || "K-tours guest and destination photograph")}" loading="lazy" decoding="async">
-        <figcaption><span>${safeText(item.title || "K-tours journey")}</span><small>${String(i+6).padStart(2,"0")}</small></figcaption>
-      </figure>`).join("");
-    if (uploaded) galleryGrid.insertAdjacentHTML("beforeend", uploaded);
+    // Once the admin-managed gallery is available, it becomes the single source
+    // of truth for both the original starter photographs and later uploads.
+    if (!Array.isArray(items)) return;
+    currentGalleryItems = items;
+    if (!items.length) {
+      galleryGrid.innerHTML = `<p class="empty-reviews">${lang === "ar" ? "سيتم إضافة صور جديدة قريبًا." : "New photographs will be added soon."}</p>`;
+      return;
+    }
+    galleryGrid.innerHTML = items.map((item, i) => {
+      const displayTitle = lang === "ar" ? (item.title_ar || item.title) : item.title;
+      return `
+      <figure class="gallery-tile ${i === 0 ? "gallery-tile-tall" : ""}" data-managed-gallery>
+        <img src="${safeText(item.image_url)}" alt="${safeText(displayTitle || "K-tours gallery photograph")}" data-lightbox-title="${safeText(displayTitle || "K-tours journey")}" data-photo-description="${safeText(item.category || "K-tours guest and destination photograph")}" loading="lazy" decoding="async">
+        <figcaption><span>${safeText(displayTitle || "K-tours journey")}</span><small>${String(i+1).padStart(2,"0")}</small></figcaption>
+      </figure>`;
+    }).join("");
   };
   const loadPublicContent = async () => {
     const [reviewsResult, galleryResult] = await Promise.allSettled([
@@ -172,10 +182,10 @@
 
   // Visitor analytics are strictly opt-in. A declined visitor is not entered in the admin visitor book.
   const visitorConsent = document.getElementById("visitorConsent");
-  const consentChoiceKey = "ktours-visitor-consent-v3";
+  const consentChoiceKey = "ktours-visitor-consent-v5";
   const visitLoggedKey = "ktours-visit-logged-at";
   const visitorIdKey = "ktours-visitor-id";
-  const visitorConsentVersion = "2026-11-23-v3";
+  const visitorConsentVersion = "2026-11-23-v5";
   function getVisitorId() {
     let id = localStorage.getItem(visitorIdKey);
     if (!id) { id = window.crypto?.randomUUID ? window.crypto.randomUUID() : (() => { const h = Array.from({length:32}, () => Math.floor(Math.random()*16).toString(16)).join(""); return `${h.slice(0,8)}-${h.slice(8,12)}-4${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20)}`; })(); localStorage.setItem(visitorIdKey, id); }
@@ -184,12 +194,12 @@
   const consentCopy = {
     en: {
       title: "Privacy choices",
-      text: "With your permission, K-tours records your IP address and sends it to ipwho.is to estimate your city/country. We also record device/browser type, page visited and referring site for basic visit statistics. Location is approximate, not GPS. Logs are kept for 30 days. Your choice does not affect website access.",
+      text: "With your permission, K-tours records your IP address and sends it to api.country.is, ipwho.is or ipapi.co to estimate your city/country. We also record device/browser type, page visited and referring site for basic visit statistics. Location is approximate, not GPS. Logs are kept for 30 days. Your choice does not affect website access.",
       link: "Read the privacy notice", accept: "Allow visitor log", decline: "No thanks"
     },
     ar: {
       title: "اختيارات الخصوصية",
-      text: "بموافقتك، يسجل K-tours عنوان IP ويرسله إلى ipwho.is لتقدير المدينة والدولة. كمان نسجل نوع الجهاز والمتصفح والصفحة التي زرتها والموقع المُحيل لإحصاءات الزيارات. الموقع تقريبي وليس GPS، وتُحفظ السجلات لمدة 30 يومًا. رفضك لا يؤثر على استخدام الموقع.",
+      text: "بموافقتك، يسجل K-tours عنوان IP ويرسله إلى api.country.is أو ipwho.is أو ipapi.co لتقدير المدينة والدولة. كمان نسجل نوع الجهاز والمتصفح والصفحة التي زرتها والموقع المُحيل لإحصاءات الزيارات. الموقع تقريبي وليس GPS، وتُحفظ السجلات لمدة 30 يومًا. رفضك لا يؤثر على استخدام الموقع.",
       link: "اقرأ إشعار الخصوصية", accept: "موافق على التسجيل", decline: "لا، شكرًا"
     }
   };

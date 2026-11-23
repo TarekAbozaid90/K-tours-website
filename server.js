@@ -21,7 +21,7 @@ const SESSION_SECRET_BASE = String(process.env.SESSION_SECRET || '');
 const VISITOR_BOOK_ENABLED = String(process.env.VISITOR_BOOK_ENABLED || 'true').toLowerCase() === 'true';
 const VISITOR_RETENTION_DAYS = 30;
 const MAX_STORED_IMAGE_BYTES = 650 * 1024 * 1024; // Keep headroom within Neon Free's 1 GB database allowance.
-const CONSENT_VERSION = '2026-11-23-v3';
+const CONSENT_VERSION = '2026-11-23-v5';
 
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is missing. Add your Neon PostgreSQL connection string in Render Environment.');
 if (!ADMIN_PASSWORD || ADMIN_PASSWORD.length < 12) throw new Error('Set ADMIN_PASSWORD in Render Environment (at least 12 characters).');
@@ -132,16 +132,19 @@ function validateImageBuffer(file) {
   if (!valid) throw Object.assign(new Error('The uploaded file does not match a supported image format.'), { status: 400 });
 }
 
-async function ensureImageCapacity(db, files) {
+async function ensureImageCapacity(db, files, replacingGalleryId = null) {
   const incomingBytes = (files || []).reduce((sum, file) => sum + (file?.buffer?.length || 0), 0);
   if (!incomingBytes) return;
   // Serialize upload capacity checks to avoid concurrent uploads exceeding the free-tier image budget.
   await db.query('SELECT pg_advisory_xact_lock(72619021)');
+  const replacingAdjustment = replacingGalleryId
+    ? ' - COALESCE((SELECT octet_length(image_data) FROM gallery_assets WHERE gallery_id = $1), 0)'
+    : '';
   const { rows } = await db.query(`
     SELECT
       COALESCE((SELECT SUM(octet_length(image_data)) FROM review_photos), 0) +
-      COALESCE((SELECT SUM(octet_length(image_data)) FROM gallery_assets), 0) AS used_bytes
-  `);
+      COALESCE((SELECT SUM(octet_length(image_data)) FROM gallery_assets), 0)${replacingAdjustment} AS used_bytes
+  `, replacingGalleryId ? [replacingGalleryId] : []);
   if (Number(rows[0].used_bytes || 0) + incomingBytes > MAX_STORED_IMAGE_BYTES) {
     throw Object.assign(new Error('The free photo-storage allowance is almost full. Please remove older photos or reduce image sizes before uploading.'), { status: 507 });
   }
@@ -162,9 +165,12 @@ function publicGallery(row) {
   return {
     id: row.id,
     title: row.title,
+    title_ar: row.title_ar || '',
     category: row.category,
+    visible: row.visible !== false,
+    sort_order: Number(row.sort_order || 0),
     created_at: row.created_at,
-    image_url: `/media/gallery/${encodeURIComponent(row.id)}`
+    image_url: row.source_url || `/media/gallery/${encodeURIComponent(row.id)}`
   };
 }
 function encryptIp(ip) {
@@ -204,41 +210,79 @@ function parseDevice(uaValue) {
   const browser = /edg\//i.test(ua) ? 'Edge' : /opr\//i.test(ua) ? 'Opera' : /firefox\//i.test(ua) ? 'Firefox' : /chrome\//i.test(ua) ? 'Chrome' : /safari\//i.test(ua) ? 'Safari' : 'Unknown';
   return { device_type, os, browser };
 }
+function getVisitorIp(req) {
+  // Render documents that the original client IP is forwarded in X-Forwarded-For.
+  // When available, Cloudflare's CF-Connecting-IP is an even clearer single-IP value.
+  const cfIp = normalizeIp(req.get('cf-connecting-ip'));
+  if (cfIp && isPublicIp(cfIp)) return cfIp;
+  const forwarded = String(req.get('x-forwarded-for') || '').split(',')[0].trim();
+  const forwardedIp = normalizeIp(forwarded);
+  if (forwardedIp && isPublicIp(forwardedIp)) return forwardedIp;
+  const fallback = normalizeIp(req.ip);
+  return isPublicIp(fallback) ? fallback : '';
+}
+
+function countryNameFromCode(code) {
+  const value = String(code || '').trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(value)) return value;
+  try {
+    return new Intl.DisplayNames(['en'], { type: 'region' }).of(value) || value;
+  } catch { return value; }
+}
+
 const geoCache = new Map();
 async function lookupIpLocation(ip) {
   if (!isPublicIp(ip)) return {};
   const cached = geoCache.get(ip);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
-  try {
-    // Called only after explicit visitor consent. The free ipwho.is endpoint
-    // supports HTTPS and does not require an API key (published limit: 1,000/day).
-    const response = await fetch(`https://ipwho.is/${encodeURIComponent(ip)}`, {
-      headers: { accept: 'application/json' },
-      signal: AbortSignal.timeout(3500)
-    });
-    if (!response.ok) {
-      console.warn('Visitor geolocation provider returned HTTP', response.status);
-      return {};
+  const providers = [
+    async () => {
+      // Country.is is a no-key HTTPS country lookup with optional city/subdivision fields.
+      const response = await fetch(`https://api.country.is/${encodeURIComponent(ip)}?fields=city,subdivision`, {
+        headers: { accept: 'application/json' }, signal: AbortSignal.timeout(2200)
+      });
+      if (!response.ok) throw new Error(`country.is HTTP ${response.status}`);
+      const data = await response.json();
+      if (!data.country) throw new Error('country.is did not return a country');
+      return { city: data.city, region: data.subdivision, country: countryNameFromCode(data.country), country_code: data.country };
+    },
+    async () => {
+      const response = await fetch(`https://ipwho.is/${encodeURIComponent(ip)}`, {
+        headers: { accept: 'application/json' }, signal: AbortSignal.timeout(2500)
+      });
+      if (!response.ok) throw new Error(`ipwho.is HTTP ${response.status}`);
+      const data = await response.json();
+      if (data.success !== true) throw new Error(String(data.message || 'ipwho.is lookup unsuccessful'));
+      return { city: data.city, region: data.region, country: data.country, country_code: data.country_code };
+    },
+    async () => {
+      const response = await fetch(`https://ipapi.co/${encodeURIComponent(ip)}/json/`, {
+        headers: { accept: 'application/json', 'user-agent': 'K-tours-VisitorBook/1.0' }, signal: AbortSignal.timeout(2500)
+      });
+      if (!response.ok) throw new Error(`ipapi.co HTTP ${response.status}`);
+      const data = await response.json();
+      if (data.error || data.reserved) throw new Error(String(data.reason || 'ipapi.co lookup unsuccessful'));
+      return { city: data.city, region: data.region, country: data.country_name || countryNameFromCode(data.country_code), country_code: data.country_code };
     }
-    const data = await response.json();
-    if (data.success !== true) {
-      console.warn('Visitor geolocation provider returned an unsuccessful lookup:', String(data.message || 'unknown error'));
-      return {};
+  ];
+  const value = { city: '', region: '', country: '', country_code: '' };
+  for (const provider of providers) {
+    try {
+      const data = await provider();
+      for (const key of ['city', 'region', 'country', 'country_code']) {
+        if (!value[key] && typeof data[key] === 'string' && data[key].trim()) {
+          value[key] = data[key].trim().slice(0, key === 'country_code' ? 4 : 100);
+        }
+      }
+      // Keep trying if the first provider returned a country but not a city.
+      if (value.country && value.city) break;
+    } catch (providerError) {
+      console.warn('Visitor geolocation provider failed:', providerError.message);
     }
-    const value = {
-      city: typeof data.city === 'string' ? data.city.slice(0, 100) : '',
-      region: typeof data.region === 'string' ? data.region.slice(0, 100) : '',
-      country: typeof data.country === 'string' ? data.country.slice(0, 100) : '',
-      country_code: typeof data.country_code === 'string' ? data.country_code.slice(0, 4) : ''
-    };
-    // Reuse approximate location for the same IP for 24 hours to conserve the free quota.
-    geoCache.set(ip, { value, expiresAt: Date.now() + 24 * 60 * 60 * 1000 });
-    if (geoCache.size > 2000) geoCache.delete(geoCache.keys().next().value);
-    return value;
-  } catch (error) {
-    console.warn('Visitor geolocation unavailable:', error.message);
-    return {};
   }
+  geoCache.set(ip, { value, expiresAt: Date.now() + (value.country || value.country_code ? 24 : 1) * 60 * 60 * 1000 });
+  if (geoCache.size > 2000) geoCache.delete(geoCache.keys().next().value);
+  return value;
 }
 function safePagePath(value) {
   try {
@@ -252,6 +296,12 @@ function safeReferrerHost(value) {
 
 async function ensureSchema() {
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      setting_key VARCHAR(100) PRIMARY KEY,
+      setting_value TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS reviews (
       id BIGSERIAL PRIMARY KEY,
       name VARCHAR(80) NOT NULL,
@@ -267,12 +317,16 @@ async function ensureSchema() {
     CREATE TABLE IF NOT EXISTS gallery (
       id BIGSERIAL PRIMARY KEY,
       title VARCHAR(100) NOT NULL,
+      title_ar VARCHAR(100) NOT NULL DEFAULT '',
       category VARCHAR(80) NOT NULL DEFAULT 'Guest moments',
       filename TEXT NOT NULL UNIQUE,
       visible BOOLEAN NOT NULL DEFAULT TRUE,
       sort_order INTEGER NOT NULL DEFAULT 0,
+      source_url TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    ALTER TABLE gallery ADD COLUMN IF NOT EXISTS source_url TEXT;
+    ALTER TABLE gallery ADD COLUMN IF NOT EXISTS title_ar VARCHAR(100) NOT NULL DEFAULT '';
     CREATE INDEX IF NOT EXISTS gallery_public_order_idx ON gallery (visible, sort_order, created_at DESC);
 
     CREATE TABLE IF NOT EXISTS review_photos (
@@ -305,14 +359,36 @@ async function ensureSchema() {
       page_path VARCHAR(160) NOT NULL DEFAULT '/',
       referrer_host VARCHAR(160) NOT NULL DEFAULT '',
       consent_version VARCHAR(40) NOT NULL,
+      geo_checked_at TIMESTAMPTZ,
       visitor_token_hash VARCHAR(64) NOT NULL DEFAULT '',
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS visitor_logs_created_idx ON visitor_logs (created_at DESC);
     ALTER TABLE visitor_logs ADD COLUMN IF NOT EXISTS visitor_token_hash VARCHAR(64) NOT NULL DEFAULT '';
+    ALTER TABLE visitor_logs ADD COLUMN IF NOT EXISTS geo_checked_at TIMESTAMPTZ;
     CREATE INDEX IF NOT EXISTS visitor_logs_token_idx ON visitor_logs (visitor_token_hash);
   `);
   await pool.query(`DELETE FROM visitor_logs WHERE created_at < NOW() - INTERVAL '${VISITOR_RETENTION_DAYS} days'`);
+  // Seed the original five website gallery photos only once. This prevents
+  // intentionally deleted starter photos from reappearing after a restart.
+  const seedCheck = await pool.query(`SELECT setting_value FROM app_settings WHERE setting_key='starter_gallery_seeded'`);
+  if (seedCheck.rows[0]?.setting_value !== 'true') {
+    const starterGallery = [
+      ['Historic Cairo', 'القاهرة التاريخية', 'Islamic Cairo', 'default:historic-cairo', 'https://thumb.wikimedia.org/wikipedia/commons/thumb/1/1f/Muizz_Street_-_Egypt.jpg/1280px-Muizz_Street_-_Egypt.jpg', 0],
+      ['Coptic Heritage', 'التراث القبطي', 'Coptic Cairo', 'default:coptic-heritage', 'https://upload.wikimedia.org/wikipedia/commons/9/95/Hanging_Church_Cairo.jpg', 1],
+      ['Philae Temple · Aswan', 'معبد فيلة · أسوان', 'Ancient Egypt', 'default:philae-aswan', 'https://thumb.wikimedia.org/wikipedia/commons/thumb/2/27/Philae_Temple_Aswan.jpg/1280px-Philae_Temple_Aswan.jpg', 2],
+      ['Saqqara · Ancient Egypt', 'سقارة · مصر القديمة', 'Ancient Egypt', 'default:saqqara', 'https://thumb.wikimedia.org/wikipedia/commons/thumb/7/7c/Step_Pyramid_of_Saqqarah.jpg/1280px-Step_Pyramid_of_Saqqarah.jpg', 3],
+      ['Guests & Memories · Giza', 'ضيوف وذكريات · الجيزة', 'Guest moments', 'default:guest-moments-giza', '/assets/gallery/group-tour-giza.jpg', 4]
+    ];
+    for (const [title, titleAr, category, filename, sourceUrl, sortOrder] of starterGallery) {
+      await pool.query(
+        `INSERT INTO gallery (title, title_ar, category, filename, visible, sort_order, source_url)
+         VALUES ($1,$2,$3,$4,TRUE,$5,$6) ON CONFLICT (filename) DO NOTHING`,
+        [title, titleAr, category, filename, sortOrder, sourceUrl]
+      );
+    }
+    await pool.query(`INSERT INTO app_settings (setting_key,setting_value) VALUES ('starter_gallery_seeded','true') ON CONFLICT (setting_key) DO UPDATE SET setting_value='true', updated_at=NOW()`);
+  }
 }
 
 app.get('/api/health', async (req, res) => {
@@ -339,9 +415,10 @@ app.get('/api/public/reviews', async (req, res, next) => {
 app.get('/api/public/gallery', async (req, res, next) => {
   try {
     const { rows } = await pool.query(`
-      SELECT g.id, g.title, g.category, g.created_at
-      FROM gallery g INNER JOIN gallery_assets ga ON ga.gallery_id = g.id
-      WHERE g.visible = TRUE ORDER BY g.sort_order ASC, g.created_at DESC LIMIT 12
+      SELECT g.id, g.title, g.title_ar, g.category, g.visible, g.sort_order, g.source_url, g.created_at
+      FROM gallery g LEFT JOIN gallery_assets ga ON ga.gallery_id = g.id
+      WHERE g.visible = TRUE AND (g.source_url IS NOT NULL OR ga.gallery_id IS NOT NULL)
+      ORDER BY g.sort_order ASC, g.created_at DESC LIMIT 30
     `);
     res.json({ gallery: rows.map(publicGallery) });
   } catch (error) { next(error); }
@@ -387,14 +464,14 @@ app.post('/api/public/visit', visitorLimiter, async (req, res, next) => {
   try {
     const visitorId = String(req.body.visitorId || '');
     if (!/^[a-f0-9-]{36}$/i.test(visitorId)) return res.status(400).json({ error: 'Invalid visitor consent reference.' });
-    const ip = normalizeIp(req.ip);
+    const ip = getVisitorIp(req);
     if (!ip) return res.status(202).json({ ok: true, logged: false });
     const geo = await lookupIpLocation(ip);
     const device = parseDevice(req.get('user-agent'));
     await pool.query(`
       INSERT INTO visitor_logs
-        (ip_encrypted, city, region, country, country_code, device_type, device_os, browser, page_path, referrer_host, consent_version, visitor_token_hash)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        (ip_encrypted, city, region, country, country_code, device_type, device_os, browser, page_path, referrer_host, consent_version, geo_checked_at, visitor_token_hash)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW(),$12)
     `, [
       encryptIp(ip), geo.city || '', geo.region || '', geo.country || '', geo.country_code || '',
       device.device_type, device.os, device.browser, safePagePath(req.body.page),
@@ -517,8 +594,9 @@ app.delete('/api/admin/reviews/:id', requireAdmin, async (req, res, next) => {
 app.get('/api/admin/gallery', requireAdmin, async (req, res, next) => {
   try {
     const { rows } = await pool.query(`
-      SELECT g.id, g.title, g.category, g.visible, g.sort_order, g.created_at
-      FROM gallery g INNER JOIN gallery_assets ga ON ga.gallery_id = g.id
+      SELECT g.id, g.title, g.title_ar, g.category, g.visible, g.sort_order, g.source_url, g.created_at
+      FROM gallery g LEFT JOIN gallery_assets ga ON ga.gallery_id = g.id
+      WHERE g.source_url IS NOT NULL OR ga.gallery_id IS NOT NULL
       ORDER BY g.sort_order ASC, g.created_at DESC
     `);
     res.json({ gallery: rows.map(publicGallery) });
@@ -530,18 +608,19 @@ app.post('/api/admin/gallery', requireAdmin, uploader.single('photo'), async (re
   try {
     client = await pool.connect();
     const title = String(req.body.title || '').trim();
+    const titleAr = String(req.body.title_ar || title).trim();
     const category = String(req.body.category || 'Guest moments').trim();
     if (!req.file) throw Object.assign(new Error('Choose a photo to upload.'), { status: 400 });
     validateImageBuffer(req.file);
-    if (!title || title.length > 100) throw Object.assign(new Error('Photo title must be between 1 and 100 characters.'), { status: 400 });
+    if (!title || title.length > 100 || titleAr.length > 100) throw Object.assign(new Error('Photo titles must be between 1 and 100 characters.'), { status: 400 });
     if (category.length > 80) throw Object.assign(new Error('Category must be 80 characters or fewer.'), { status: 400 });
     await client.query('BEGIN');
     await ensureImageCapacity(client, [req.file]);
     const { rows: countRows } = await client.query('SELECT COUNT(*)::int AS total FROM gallery');
     const placeholderFilename = `db-image-${crypto.randomUUID()}`;
     const { rows } = await client.query(
-      'INSERT INTO gallery (title, category, filename, visible, sort_order) VALUES ($1, $2, $3, TRUE, $4) RETURNING id',
-      [title, category, placeholderFilename, countRows[0].total]
+      'INSERT INTO gallery (title, title_ar, category, filename, visible, sort_order) VALUES ($1, $2, $3, $4, TRUE, $5) RETURNING id',
+      [title, titleAr, category, placeholderFilename, countRows[0].total]
     );
     await client.query('INSERT INTO gallery_assets (gallery_id, mime_type, image_data) VALUES ($1, $2, $3)', [rows[0].id, req.file.mimetype, req.file.buffer]);
     await client.query('COMMIT');
@@ -552,6 +631,62 @@ app.post('/api/admin/gallery', requireAdmin, uploader.single('photo'), async (re
   } finally { client?.release(); }
 });
 
+app.patch('/api/admin/gallery/:id', requireAdmin, uploader.single('photo'), async (req, res, next) => {
+  let client;
+  try {
+    const id = String(req.params.id);
+    if (!/^\d{1,12}$/.test(id)) return res.status(404).json({ error: 'Photo not found.' });
+    const title = String(req.body.title || '').trim();
+    const titleAr = String(req.body.title_ar || title).trim();
+    const category = String(req.body.category || 'Guest moments').trim();
+    const visible = String(req.body.visible ?? 'true') === 'true';
+    const sortOrder = Number(req.body.sort_order);
+    if (!title || title.length > 100 || titleAr.length > 100) throw Object.assign(new Error('Photo titles must be between 1 and 100 characters.'), { status: 400 });
+    if (category.length > 80) throw Object.assign(new Error('Category must be 80 characters or fewer.'), { status: 400 });
+    if (!Number.isInteger(sortOrder) || sortOrder < 0 || sortOrder > 10000) throw Object.assign(new Error('Invalid gallery order.'), { status: 400 });
+    client = await pool.connect();
+    await client.query('BEGIN');
+    const currentItem = await client.query('SELECT id FROM gallery WHERE id=$1 FOR UPDATE', [id]);
+    if (!currentItem.rowCount) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Photo not found.' }); }
+    if (req.file) {
+      validateImageBuffer(req.file);
+      await ensureImageCapacity(client, [req.file], id);
+      await client.query('UPDATE gallery SET title=$1, title_ar=$2, category=$3, visible=$4, sort_order=$5, source_url=NULL WHERE id=$6', [title, titleAr, category, visible, sortOrder, id]);
+      await client.query(`INSERT INTO gallery_assets (gallery_id, mime_type, image_data) VALUES ($1,$2,$3)
+        ON CONFLICT (gallery_id) DO UPDATE SET mime_type=EXCLUDED.mime_type, image_data=EXCLUDED.image_data, created_at=NOW()`, [id, req.file.mimetype, req.file.buffer]);
+    } else {
+      const result = await client.query('UPDATE gallery SET title=$1, title_ar=$2, category=$3, visible=$4, sort_order=$5 WHERE id=$6', [title, titleAr, category, visible, sortOrder, id]);
+      if (!result.rowCount) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Photo not found.' }); }
+    }
+    const exists = await client.query('SELECT 1 FROM gallery WHERE id=$1', [id]);
+    if (!exists.rowCount) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Photo not found.' }); }
+    await client.query('COMMIT');
+    res.json({ ok: true });
+  } catch (error) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
+    next(error);
+  } finally { client?.release(); }
+});
+
+app.post('/api/admin/gallery/:id/move', requireAdmin, async (req, res, next) => {
+  const direction = req.body?.direction;
+  if (!['up', 'down'].includes(direction)) return res.status(400).json({ error: 'Direction must be up or down.' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query('SELECT id, sort_order FROM gallery WHERE source_url IS NOT NULL OR id IN (SELECT gallery_id FROM gallery_assets) ORDER BY sort_order ASC, created_at DESC');
+    const index = rows.findIndex(row => String(row.id) === String(req.params.id));
+    const otherIndex = direction === 'up' ? index - 1 : index + 1;
+    if (index < 0 || otherIndex < 0 || otherIndex >= rows.length) { await client.query('ROLLBACK'); return res.json({ ok: true, moved: false }); }
+    const current = rows[index], other = rows[otherIndex];
+    await client.query('UPDATE gallery SET sort_order=$1 WHERE id=$2', [other.sort_order, current.id]);
+    await client.query('UPDATE gallery SET sort_order=$1 WHERE id=$2', [current.sort_order, other.id]);
+    await client.query('COMMIT');
+    res.json({ ok: true, moved: true });
+  } catch (error) { await client.query('ROLLBACK').catch(() => {}); next(error); }
+  finally { client.release(); }
+});
+
 app.delete('/api/admin/gallery/:id', requireAdmin, async (req, res, next) => {
   try {
     const { rowCount } = await pool.query('DELETE FROM gallery WHERE id = $1', [req.params.id]);
@@ -560,21 +695,80 @@ app.delete('/api/admin/gallery/:id', requireAdmin, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+app.get('/api/admin/stats', requireAdmin, async (req, res, next) => {
+  try {
+    const [reviews, gallery, visitors, countries, devices, dailyVisits, popularPages, referrers, browsers] = await Promise.all([
+      pool.query(`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE approved=TRUE)::int AS approved,
+        COUNT(*) FILTER (WHERE approved=FALSE)::int AS pending,
+        COALESCE(ROUND(AVG(rating) FILTER (WHERE approved=TRUE)::numeric,2),0)::float AS average_rating
+        FROM reviews`),
+      pool.query(`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE visible=TRUE)::int AS visible
+        FROM gallery WHERE source_url IS NOT NULL OR id IN (SELECT gallery_id FROM gallery_assets)`),
+      pool.query(`SELECT COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE created_at >= ((NOW() AT TIME ZONE 'Africa/Cairo')::date::timestamp AT TIME ZONE 'Africa/Cairo'))::int AS today,
+        COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '7 days')::int AS last7,
+        COUNT(*) FILTER (WHERE COALESCE(country,'')<>'' OR COALESCE(country_code,'')<>'')::int AS located,
+        COUNT(DISTINCT NULLIF(visitor_token_hash,''))::int AS unique_browsers
+        FROM visitor_logs WHERE created_at >= NOW() - INTERVAL '${VISITOR_RETENTION_DAYS} days'`),
+      pool.query(`SELECT COALESCE(NULLIF(country,''), NULLIF(country_code,''), 'Country unavailable') AS label, COUNT(*)::int AS total
+        FROM visitor_logs WHERE created_at >= NOW() - INTERVAL '${VISITOR_RETENTION_DAYS} days'
+        GROUP BY 1 ORDER BY total DESC LIMIT 6`),
+      pool.query(`SELECT COALESCE(NULLIF(device_type,''),'Unknown') AS label, COUNT(*)::int AS total
+        FROM visitor_logs WHERE created_at >= NOW() - INTERVAL '${VISITOR_RETENTION_DAYS} days'
+        GROUP BY 1 ORDER BY total DESC`),
+      pool.query(`SELECT TO_CHAR(days.day, 'Dy DD Mon') AS label, COUNT(v.id)::int AS total
+        FROM generate_series((NOW() AT TIME ZONE 'Africa/Cairo')::date - INTERVAL '6 days',
+          (NOW() AT TIME ZONE 'Africa/Cairo')::date, INTERVAL '1 day') AS days(day)
+        LEFT JOIN visitor_logs v ON (v.created_at AT TIME ZONE 'Africa/Cairo')::date = days.day::date
+        GROUP BY days.day ORDER BY days.day`),
+      pool.query(`SELECT COALESCE(NULLIF(page_path,''),'/') AS label, COUNT(*)::int AS total
+        FROM visitor_logs WHERE created_at >= NOW() - INTERVAL '${VISITOR_RETENTION_DAYS} days'
+        GROUP BY 1 ORDER BY total DESC LIMIT 6`),
+      pool.query(`SELECT COALESCE(NULLIF(referrer_host,''),'Direct / no referrer') AS label, COUNT(*)::int AS total
+        FROM visitor_logs WHERE created_at >= NOW() - INTERVAL '${VISITOR_RETENTION_DAYS} days'
+        GROUP BY 1 ORDER BY total DESC LIMIT 6`),
+      pool.query(`SELECT COALESCE(NULLIF(browser,''),'Unknown') AS label, COUNT(*)::int AS total
+        FROM visitor_logs WHERE created_at >= NOW() - INTERVAL '${VISITOR_RETENTION_DAYS} days'
+        GROUP BY 1 ORDER BY total DESC LIMIT 6`)
+    ]);
+    res.json({
+      reviews: reviews.rows[0], gallery: gallery.rows[0], visitors: visitors.rows[0],
+      topCountries: countries.rows, devices: devices.rows, dailyVisits: dailyVisits.rows,
+      popularPages: popularPages.rows, referrers: referrers.rows, browsers: browsers.rows
+    });
+  } catch (error) { next(error); }
+});
+
 app.get('/api/admin/visitors', requireAdmin, async (req, res, next) => {
   if (!VISITOR_BOOK_ENABLED) return res.json({ enabled: false, visitors: [], total: 0, today: 0 });
   try {
     await pool.query(`DELETE FROM visitor_logs WHERE created_at < NOW() - INTERVAL '${VISITOR_RETENTION_DAYS} days'`);
+    // Retry missing country names in small batches (max 6 attempts per admin page load).
+    const missing = await pool.query(`SELECT id, ip_encrypted FROM visitor_logs
+      WHERE COALESCE(country,'')='' AND (geo_checked_at IS NULL OR geo_checked_at < NOW() - INTERVAL '15 minutes')
+      ORDER BY created_at DESC LIMIT 6`);
+    for (let offset = 0; offset < missing.rows.length; offset += 3) {
+      const batch = missing.rows.slice(offset, offset + 3);
+      await Promise.all(batch.map(async row => {
+        const ip = decryptIp(row.ip_encrypted);
+        const geo = await lookupIpLocation(ip);
+        await pool.query(`UPDATE visitor_logs SET city=$1, region=$2, country=$3, country_code=$4, geo_checked_at=NOW() WHERE id=$5`,
+          [geo.city || '', geo.region || '', geo.country || '', geo.country_code || '', row.id]);
+      }));
+    }
     const [{ rows }, counts] = await Promise.all([
       pool.query(`SELECT id, ip_encrypted, city, region, country, country_code, device_type, device_os, browser, page_path, referrer_host, created_at FROM visitor_logs ORDER BY created_at DESC LIMIT 150`),
       pool.query(`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE created_at >= ((NOW() AT TIME ZONE 'Africa/Cairo')::date::timestamp AT TIME ZONE 'Africa/Cairo'))::int AS today FROM visitor_logs`)
     ]);
-    res.json({
-      enabled: true,
-      visitors: rows.map(row => ({ ...row, ip: decryptIp(row.ip_encrypted), ip_encrypted: undefined })),
-      total: counts.rows[0].total,
-      today: counts.rows[0].today,
-      retention_days: VISITOR_RETENTION_DAYS
-    });
+    res.json({ enabled: true, visitors: rows.map(row => ({ ...row, ip: decryptIp(row.ip_encrypted), ip_encrypted: undefined })), total: counts.rows[0].total, today: counts.rows[0].today, retention_days: VISITOR_RETENTION_DAYS });
+  } catch (error) { next(error); }
+});
+
+app.post('/api/admin/visitors/retry-location', requireAdmin, async (req, res, next) => {
+  try {
+    const result = await pool.query(`UPDATE visitor_logs SET geo_checked_at = NOW() - INTERVAL '16 minutes'
+      WHERE COALESCE(country,'')='' AND created_at >= NOW() - INTERVAL '${VISITOR_RETENTION_DAYS} days'`);
+    res.json({ ok: true, queued: result.rowCount });
   } catch (error) { next(error); }
 });
 

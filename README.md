@@ -8,18 +8,25 @@ K-tours is a bilingual English / Egyptian Arabic tourism website with a private 
 - **Neon Free PostgreSQL:** stores reviews, image bytes, gallery records, visitor-book entries and admin sessions. Neon is a separate provider (not hosted inside Render), selected because Render's free Postgres expires after 30 days.
 - **Database image storage:** uploaded review/gallery images are stored as PostgreSQL `BYTEA` data. Each photo is limited to 3 MB; a review may include up to two photos; stored uploaded image bytes are capped at about 650 MB to leave database headroom. This avoids a Render Persistent Disk and keeps uploaded images after a Render restart/redeploy.
 - **GitHub:** stores source code and triggers Render deployment.
-- **IP geolocation:** after a visitor explicitly opts in, the server asks `ipwho.is` for approximate city/country. The IP is encrypted in the database. Attribution is shown on the privacy page; the free endpoint currently lists 1,000 requests/day per client IP and allows commercial use; attribution is provided as a courtesy.
+- **IP geolocation:** after a visitor explicitly opts in, the server reads the client IP forwarded by Render/Cloudflare and asks `country.is`, `ipwho.is` and `ipapi.co` for approximate country and, when available, city/region. The IP is encrypted in the database; both providers are named in the privacy page.
+
+### Admin improvements – 23 November 2026
+
+- Added Statistics dashboard for traffic, reviews and gallery data.
+- Migrated the original five homepage gallery tiles into the database-managed gallery, including English/Arabic titles.
+- Added edit, show/hide, replace-image, reorder and delete controls for all gallery items.
+- Improved visitor IP extraction using Render/Cloudflare forwarded headers and added a fallback geolocation provider; missing country lookups are retried in limited batches.
 
 ### 23 November 2026 maintenance update
 
-- Visitor-book consent versions are synchronized between the browser and server (`2026-11-23-v3`); the browser asks for consent again after this update.
-- IP city/country lookup uses the HTTPS `ipwho.is` endpoint only after opt-in, with a 24-hour in-memory cache. A failed/rate-limited geolocation lookup does not prevent the visit row from being saved.
+- Visitor-book consent versions are synchronized between the browser and server (`2026-11-23-v5`); the browser asks for consent again because the geolocation notice now names a fallback provider.
+- IP country lookup uses `country.is`, with `ipwho.is` and `ipapi.co` as fallbacks for country/city/region, only after opt-in, with an in-memory cache. Missing country values in older rows can be retried in small batches from the admin Visitor Book.
 - Customer review and admin gallery uploads accept JPG/PNG/WebP images up to 3 MB per file. Reviews still allow at most two photos.
 
 ## Project structure
 
 - `public/index.html`, `public/styles.css`, `public/app.js` — bilingual public site, lighter forest-green/gold theme, image lightbox, review form and privacy choice banner.
-- `public/admin.html`, `public/admin.css`, `public/admin.js` — admin login, review moderation, gallery management and visitor book.
+- `public/admin.html`, `public/admin.css`, `public/admin.js` — admin login, statistics, review moderation, full gallery management and visitor book.
 - `public/privacy.html` — bilingual visitor-data privacy notice and consent explanation.
 - `server.js` — API, admin authentication, visitor logging, IP encryption, image uploads and PostgreSQL access.
 - `render.yaml` — Render Free Web Service Blueprint; database URL is supplied manually from Neon.
@@ -77,8 +84,8 @@ The app creates the review, gallery, image, visitor-log and session tables autom
 
 - Admin username/password are server-side Render Environment variables. Do not edit `admin.js` or `config.js` to change them.
 - To change credentials: Render → `k-tours-fullstack` → **Environment**, edit `ADMIN_USERNAME` and/or `ADMIN_PASSWORD`, then save/redeploy. Existing sessions are invalidated when credentials change.
-- The admin dashboard contains **Guest reviews**, **Photo gallery** and **Visitor book** tabs.
-- The visitor table is limited to the last 30 days and includes visit time, IP, approximate city/region/country, device type, browser/OS, page and referring host. You can refresh or clear the log from the dashboard.
+- The admin dashboard contains **Statistics**, **Guest reviews**, **Photo gallery** and **Visitor book** tabs. Statistics include review totals and average rating, active gallery items, recorded visits, top visitor countries and device categories, seven-day traffic, unique consented browsers, popular pages, referrers and browser distribution. The gallery tab manages the original starter photos and new uploads: edit English/Arabic titles and category, hide/show, replace image, reorder and delete.
+- The visitor table is limited to the last 30 days and includes visit time, IP, approximate city/region/country, device type, browser/OS, page and referring host. On Render, the app reads the client address from `CF-Connecting-IP` when available, then the first `X-Forwarded-For` entry, before falling back to Express's proxy-resolved address. Missing country names and codes are retried from the admin view at a limited rate. A country code is converted to a readable country name where possible. You can refresh or clear the log from the dashboard.
 
 ## Visitor privacy and geolocation
 
@@ -86,7 +93,7 @@ The app creates the review, gallery, image, visitor-log and session tables autom
 - Only visitors who accepted are entered into the K-tours visitor table; the same browser is recorded no more than once every 24 hours. The browser can open **Privacy choices** in the footer to withdraw consent; the site attempts to delete prior rows associated with that browser reference.
 - Full IP addresses are encrypted at rest using AES-256-GCM and decrypted only for the authenticated admin visitor-book view.
 - City/country are inferred from IP and are approximate, not GPS coordinates. VPNs, mobile carriers and corporate gateways may make them inaccurate.
-- On opt-in only, the server sends the visitor IP to `ipwho.is` for city/country estimation. The provider receives the IP, and the privacy notice names the provider. The free endpoint lists 1,000 requests/day per client IP and allows commercial use; attribution is provided as a courtesy.
+- On opt-in only, the server may send the visitor IP to `api.country.is`, `ipwho.is` and/or `ipapi.co` for country and, when available, city/region estimation. All three providers are named in the privacy notice. Providers can rate-limit requests, so location remains approximate and may be unavailable.
 - Visitor-log rows are automatically deleted after 30 days. Review submissions have their own moderation consent and remain private until approved.
 - Egypt's Personal Data Protection Law and its Executive Regulations may apply to this processing. The public privacy notice is a technical transparency starting point, not legal advice or a claim of regulatory compliance. Have an Egyptian privacy professional review lawful basis, licensing/permit and cross-border processing requirements before public launch.
 
@@ -135,6 +142,6 @@ The new Neon database starts with an empty schema. Existing reviews/photos from 
 
 - Render free service limitations: <https://render.com/docs/free>
 - Neon Free quotas: <https://neon.com/docs/introduction/plans>
-- IP geolocation API documentation: <https://ipwhois.io/documentation>
+- IP geolocation APIs: <https://country.is/>, <https://ipwhois.io/documentation>, <https://ipapi.co/api/>
 - Egyptian PDPC consent guidelines: <https://pdpc.gov.eg/assets/pdf-data/Guidelines/DSConsent.pdf>
 - Egyptian Personal Data Protection Law 151/2020 (Official Gazette): <https://escc.gov.eg/assets/docs/law-151-2020.pdf>
