@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: k-tours
+    name: k-tours-fullstack
     runtime: node
     plan: free
     region: frankfurt
@@ -11,13 +11,13 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: postgresql://neondb_owner:npg_2iOHTFmKE0JU@ep-blue-glade-bhevjf18-pooler.c-10.eu-central-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require
+      - key: DATABASE_URL
         sync: false
       - key: SESSION_SECRET
         generateValue: true
-      - key: Kataif
+      - key: ADMIN_USERNAME
         sync: false
-      - key: Kataif@12340
+      - key: ADMIN_PASSWORD
         sync: false
       - key: VISITOR_BOOK_ENABLED
         value: "true"
