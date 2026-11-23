@@ -21,7 +21,7 @@ const SESSION_SECRET_BASE = String(process.env.SESSION_SECRET || '');
 const VISITOR_BOOK_ENABLED = String(process.env.VISITOR_BOOK_ENABLED || 'true').toLowerCase() === 'true';
 const VISITOR_RETENTION_DAYS = 30;
 const MAX_STORED_IMAGE_BYTES = 650 * 1024 * 1024; // Keep headroom within Neon Free's 1 GB database allowance.
-const CONSENT_VERSION = '2026-11-22-v1';
+const CONSENT_VERSION = '2026-11-23-v3';
 
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is missing. Add your Neon PostgreSQL connection string in Render Environment.');
 if (!ADMIN_PASSWORD || ADMIN_PASSWORD.length < 12) throw new Error('Set ADMIN_PASSWORD in Render Environment (at least 12 characters).');
@@ -115,7 +115,7 @@ app.use('/api', checkSameOrigin);
 const allowedMime = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const uploader = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 1.5 * 1024 * 1024, files: 2, fields: 8, fieldSize: 10_000 },
+  limits: { fileSize: 3 * 1024 * 1024, files: 2, fields: 8, fieldSize: 10_000 },
   fileFilter: (req, file, cb) => {
     if (!allowedMime.has(file.mimetype)) return cb(new Error('Only JPG, PNG and WebP images are accepted.'));
     cb(null, true);
@@ -204,23 +204,37 @@ function parseDevice(uaValue) {
   const browser = /edg\//i.test(ua) ? 'Edge' : /opr\//i.test(ua) ? 'Opera' : /firefox\//i.test(ua) ? 'Firefox' : /chrome\//i.test(ua) ? 'Chrome' : /safari\//i.test(ua) ? 'Safari' : 'Unknown';
   return { device_type, os, browser };
 }
+const geoCache = new Map();
 async function lookupIpLocation(ip) {
   if (!isPublicIp(ip)) return {};
+  const cached = geoCache.get(ip);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
   try {
-    // The free ipdata endpoint is used only after the visitor opts in. Its free tier
-    // currently allows 1,000 city-level lookups/day and requires attribution.
-    const response = await fetch(`https://ipdata.free/${encodeURIComponent(ip)}`, {
+    // Called only after explicit visitor consent. The free ipwho.is endpoint
+    // supports HTTPS and does not require an API key (published limit: 1,000/day).
+    const response = await fetch(`https://ipwho.is/${encodeURIComponent(ip)}`, {
       headers: { accept: 'application/json' },
       signal: AbortSignal.timeout(3500)
     });
-    if (!response.ok) return {};
+    if (!response.ok) {
+      console.warn('Visitor geolocation provider returned HTTP', response.status);
+      return {};
+    }
     const data = await response.json();
-    return {
+    if (data.success !== true) {
+      console.warn('Visitor geolocation provider returned an unsuccessful lookup:', String(data.message || 'unknown error'));
+      return {};
+    }
+    const value = {
       city: typeof data.city === 'string' ? data.city.slice(0, 100) : '',
       region: typeof data.region === 'string' ? data.region.slice(0, 100) : '',
-      country: typeof (data.country_name || data.country) === 'string' ? String(data.country_name || data.country).slice(0, 100) : '',
+      country: typeof data.country === 'string' ? data.country.slice(0, 100) : '',
       country_code: typeof data.country_code === 'string' ? data.country_code.slice(0, 4) : ''
     };
+    // Reuse approximate location for the same IP for 24 hours to conserve the free quota.
+    geoCache.set(ip, { value, expiresAt: Date.now() + 24 * 60 * 60 * 1000 });
+    if (geoCache.size > 2000) geoCache.delete(geoCache.keys().next().value);
+    return value;
   } catch (error) {
     console.warn('Visitor geolocation unavailable:', error.message);
     return {};
@@ -571,6 +585,11 @@ app.delete('/api/admin/visitors', requireAdmin, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// Friendly admin URL: /admin and /admin/ resolve to the existing admin page.
+app.get(['/admin', '/admin/'], (req, res) => {
+  res.redirect(302, '/admin.html');
+});
+
 app.use(express.static(PUBLIC_DIR, {
   dotfiles: 'deny',
   index: 'index.html',
@@ -588,7 +607,7 @@ app.use((req, res) => {
 app.use((error, req, res, next) => {
   if (res.headersSent) return next(error);
   if (error instanceof multer.MulterError) {
-    const message = error.code === 'LIMIT_FILE_SIZE' ? 'Each photo must be 1.5 MB or smaller.' : error.code === 'LIMIT_FILE_COUNT' ? 'Up to 2 review photos are allowed.' : 'Invalid upload.';
+    const message = error.code === 'LIMIT_FILE_SIZE' ? 'Each photo must be 3 MB or smaller.' : error.code === 'LIMIT_FILE_COUNT' ? 'Up to 2 review photos are allowed.' : 'Invalid upload.';
     return res.status(400).json({ error: message });
   }
   const status = Number(error.status) || 500;

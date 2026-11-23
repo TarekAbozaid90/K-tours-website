@@ -207,8 +207,8 @@
     const category = document.getElementById('galleryCategory').value;
     const file = document.getElementById('galleryFile').files[0];
     if (!file) return;
-    if (!/^image\/(jpeg|png|webp)$/.test(file.type) || file.size > 1.5 * 1024 * 1024) {
-      feedback('galleryFeedback', 'Please choose JPG, PNG or WebP up to 1.5 MB.');
+    if (!/^image\/(jpeg|png|webp)$/.test(file.type) || file.size > 3 * 1024 * 1024) {
+      feedback('galleryFeedback', 'Please choose JPG, PNG or WebP up to 3 MB.');
       return;
     }
     const submit = event.currentTarget.querySelector('button[type=submit]');

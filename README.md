@@ -6,9 +6,15 @@ K-tours is a bilingual English / Egyptian Arabic tourism website with a private 
 
 - **Render Free Web Service (Node.js / Express):** hosts the public website, admin dashboard and protected APIs. It sleeps after 15 minutes without traffic and may take about a minute to wake up.
 - **Neon Free PostgreSQL:** stores reviews, image bytes, gallery records, visitor-book entries and admin sessions. Neon is a separate provider (not hosted inside Render), selected because Render's free Postgres expires after 30 days.
-- **Database image storage:** uploaded review/gallery images are stored as PostgreSQL `BYTEA` data. Each photo is limited to 1.5 MB; a review may include up to two photos; stored uploaded image bytes are capped at about 650 MB to leave database headroom. This avoids a Render Persistent Disk and keeps uploaded images after a Render restart/redeploy.
+- **Database image storage:** uploaded review/gallery images are stored as PostgreSQL `BYTEA` data. Each photo is limited to 3 MB; a review may include up to two photos; stored uploaded image bytes are capped at about 650 MB to leave database headroom. This avoids a Render Persistent Disk and keeps uploaded images after a Render restart/redeploy.
 - **GitHub:** stores source code and triggers Render deployment.
-- **IP geolocation:** after a visitor explicitly opts in, the server asks `ipdata.free` for approximate city/country. The IP is encrypted in the database. Attribution is shown on the privacy page; the free endpoint currently states 1,000 city-level lookups/day and commercial use with attribution.
+- **IP geolocation:** after a visitor explicitly opts in, the server asks `ipwho.is` for approximate city/country. The IP is encrypted in the database. Attribution is shown on the privacy page; the free endpoint currently lists 1,000 requests/day per client IP and allows commercial use; attribution is provided as a courtesy.
+
+### 23 November 2026 maintenance update
+
+- Visitor-book consent versions are synchronized between the browser and server (`2026-11-23-v3`); the browser asks for consent again after this update.
+- IP city/country lookup uses the HTTPS `ipwho.is` endpoint only after opt-in, with a 24-hour in-memory cache. A failed/rate-limited geolocation lookup does not prevent the visit row from being saved.
+- Customer review and admin gallery uploads accept JPG/PNG/WebP images up to 3 MB per file. Reviews still allow at most two photos.
 
 ## Project structure
 
@@ -80,7 +86,7 @@ The app creates the review, gallery, image, visitor-log and session tables autom
 - Only visitors who accepted are entered into the K-tours visitor table; the same browser is recorded no more than once every 24 hours. The browser can open **Privacy choices** in the footer to withdraw consent; the site attempts to delete prior rows associated with that browser reference.
 - Full IP addresses are encrypted at rest using AES-256-GCM and decrypted only for the authenticated admin visitor-book view.
 - City/country are inferred from IP and are approximate, not GPS coordinates. VPNs, mobile carriers and corporate gateways may make them inaccurate.
-- On opt-in only, the server sends the visitor IP to `ipdata.free` for city/country estimation. The provider receives the IP, and the privacy notice names the provider. Free usage currently allows 1,000 city-level lookups/day and requires attribution.
+- On opt-in only, the server sends the visitor IP to `ipwho.is` for city/country estimation. The provider receives the IP, and the privacy notice names the provider. The free endpoint lists 1,000 requests/day per client IP and allows commercial use; attribution is provided as a courtesy.
 - Visitor-log rows are automatically deleted after 30 days. Review submissions have their own moderation consent and remain private until approved.
 - Egypt's Personal Data Protection Law and its Executive Regulations may apply to this processing. The public privacy notice is a technical transparency starting point, not legal advice or a claim of regulatory compliance. Have an Egyptian privacy professional review lawful basis, licensing/permit and cross-border processing requirements before public launch.
 
@@ -89,7 +95,7 @@ The app creates the review, gallery, image, visitor-log and session tables autom
 - Render Free Web Services sleep after 15 minutes idle and may need about a minute to wake. They have an ephemeral filesystem; this project does not depend on it for uploaded images or database records.
 - Render Free Postgres is intentionally **not** used: it expires 30 days after creation.
 - Neon Free is external to Render but offers a persistent free Postgres database within its current quota. The project will need a paid Neon tier or cleanup/backup strategy if storage, compute-hours or network use exceeds the free allowance.
-- Images are stored inside Neon as binary data. Keep photos compressed and small; uploaded photos are limited to 1.5 MB each, and the application caps the total uploaded image bytes at about 650 MB to leave headroom in Neon Free's 1 GB database quota shared with reviews, sessions and visitor records.
+- Images are stored inside Neon as binary data. Keep photos compressed and small; uploaded photos are limited to 3 MB each, and the application caps the total uploaded image bytes at about 650 MB to leave headroom in Neon Free's 1 GB database quota shared with reviews, sessions and visitor records.
 - This is a small portfolio/review setup, not a high-availability production architecture. Export backups regularly from Neon.
 
 ## Existing data migration
@@ -108,7 +114,7 @@ The new Neon database starts with an empty schema. Existing reviews/photos from 
 - The database URL, admin password, session secret and visitor IP-encryption secret are server-side only. Never put them in `public/config.js` or commit them.
 - Admin cookie is HttpOnly, Secure in production and SameSite Strict. Login attempts and review/visitor submissions are rate-limited.
 - Public image delivery is limited to visible gallery assets and approved review photos. Pending review images are only accessible after admin authentication.
-- Image type is checked against the file signature; uploads are limited to JPEG/PNG/WebP and 1.5 MB each.
+- Image type is checked against the file signature; uploads are limited to JPEG/PNG/WebP and 3 MB each.
 - The visitor dashboard is protected by the admin session. Do not share admin credentials.
 
 ## Launch checklist
@@ -129,6 +135,6 @@ The new Neon database starts with an empty schema. Existing reviews/photos from 
 
 - Render free service limitations: <https://render.com/docs/free>
 - Neon Free quotas: <https://neon.com/docs/introduction/plans>
-- ipdata free service: <https://ipdata.co/free>
+- IP geolocation API documentation: <https://ipwhois.io/documentation>
 - Egyptian PDPC consent guidelines: <https://pdpc.gov.eg/assets/pdf-data/Guidelines/DSConsent.pdf>
 - Egyptian Personal Data Protection Law 151/2020 (Official Gazette): <https://escc.gov.eg/assets/docs/law-151-2020.pdf>
